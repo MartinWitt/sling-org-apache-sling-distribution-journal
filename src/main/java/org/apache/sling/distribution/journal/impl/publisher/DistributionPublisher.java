@@ -23,6 +23,7 @@ import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 import static org.apache.sling.distribution.DistributionRequestState.ACCEPTED;
 import static org.apache.sling.distribution.DistributionRequestType.*;
+import static org.apache.sling.distribution.journal.shared.DistributionMetricsService.PUB_COMPONENT;
 import static org.apache.sling.distribution.journal.shared.DistributionMetricsService.timed;
 import static org.apache.sling.distribution.journal.shared.Strings.requireNotBlank;
 
@@ -150,40 +151,24 @@ public class DistributionPublisher implements DistributionAgent {
         requireNonNull(factory);
         requireNonNull(distributionMetricsService);
         pubAgentName = requireNotBlank(config.name());
-
         queuedTimeout = config.queuedTimeout();
-
         pkgType = packageBuilder.getType();
 
-        this.sender = messagingProvider.createSender(topics.getPackageTopic());
-        
-        Dictionary<String, Object> props = createServiceProps(config);
-        componentReg = requireNonNull(context.registerService(DistributionAgent.class, this, props));
-        
         distributionLogEventListener = new DistributionLogEventListener(context, log, pubAgentName);
-
-        DistPublisherJMX bean;
-        try {
-            bean = new DistPublisherJMX(pubAgentName, discoveryService, this);
-        } catch (NotCompliantMBeanException e) {
-            throw new RuntimeException(e);
-        }
-        reg = new JMXRegistration(bean, "agent", pubAgentName);
+        reg = registerJMXBean();
+        String subscriberCountName = PUB_COMPONENT + ".subscriber_count;pub_name=" + pubAgentName;
+        distributionMetricsService.createGauge(subscriberCountName, this::getNumSubscribedAgents);
         
-        String msg = format("Started Publisher agent %s with packageBuilder %s, queuedTimeout %s",
-                pubAgentName, pkgType, queuedTimeout);
-        distributionMetricsService.createGauge(
-                DistributionMetricsService.PUB_COMPONENT + ".subscriber_count;pub_name=" + pubAgentName,
-                () -> discoveryService.getTopologyView().getSubscribedAgentIds().size()
-        );
-        
+        sender = messagingProvider.createSender(topics.getPackageTopic());
         statusPoller = messagingProvider.createPoller(
                 topics.getStatusTopic(),
                 Reset.earliest,
                 HandlerAdapter.create(PackageStatusMessage.class, pubQueueProvider::handleStatus)
                 );
         
-        log.info(msg);
+        componentReg = registerService(context, config);
+        log.info("Started Publisher agent {} with packageBuilder {}, queuedTimeout {}",
+                pubAgentName, pkgType, queuedTimeout);
     }
 
     @Deactivate
@@ -195,16 +180,6 @@ public class DistributionPublisher implements DistributionAgent {
         log.info(msg);
     }
     
-    private Dictionary<String, Object> createServiceProps(PublisherConfiguration config) {
-        Dictionary<String, Object> props = new Hashtable<>();
-        props.put("name", config.name());
-        props.put("title", config.name());
-        props.put("details", config.name());
-        props.put("packageBuilder.target", config.packageBuilder_target());
-        props.put("webconsole.configurationFactory.nameHint", config.webconsole_configurationFactory_nameHint());
-        return props;
-    }
-
     /**
      * Get queue names for alive subscribed subscriber agents.
      */
@@ -250,6 +225,29 @@ public class DistributionPublisher implements DistributionAgent {
             return execute(resourceResolver, request, handler);
         } else {
             return executeUnsupported(request);
+        }
+    }
+
+    private ServiceRegistration<DistributionAgent> registerService(BundleContext context, PublisherConfiguration config) {
+        Dictionary<String, Object> props = new Hashtable<>();
+        props.put("name", config.name());
+        props.put("title", config.name());
+        props.put("details", config.name());
+        props.put("packageBuilder.target", config.packageBuilder_target());
+        props.put("webconsole.configurationFactory.nameHint", config.webconsole_configurationFactory_nameHint());
+        return requireNonNull(context.registerService(DistributionAgent.class, this, props));
+    }
+
+    private int getNumSubscribedAgents() {
+        return discoveryService.getTopologyView().getSubscribedAgentIds().size();
+    }
+
+    private JMXRegistration registerJMXBean() {
+        try {
+            DistPublisherJMX bean = new DistPublisherJMX(pubAgentName, discoveryService, this);
+            return new JMXRegistration(bean, "agent", pubAgentName);
+        } catch (NotCompliantMBeanException e) {
+            throw new RuntimeException(e);
         }
     }
 
