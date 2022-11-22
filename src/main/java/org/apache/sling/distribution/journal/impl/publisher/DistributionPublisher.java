@@ -36,7 +36,6 @@ import java.util.function.ToLongFunction;
 
 import javax.annotation.Nonnull;
 import javax.annotation.ParametersAreNonnullByDefault;
-import javax.management.NotCompliantMBeanException;
 
 import org.apache.commons.io.IOUtils;
 import org.apache.sling.distribution.DistributionResponseInfo;
@@ -48,7 +47,6 @@ import org.apache.sling.distribution.journal.queue.PubQueueProvider;
 import org.apache.sling.distribution.journal.shared.DefaultDistributionLog;
 import org.apache.sling.distribution.journal.shared.DistributionLogEventListener;
 import org.apache.sling.distribution.journal.shared.DistributionMetricsService;
-import org.apache.sling.distribution.journal.shared.JMXRegistration;
 import org.apache.sling.distribution.journal.shared.Topics;
 import org.apache.sling.api.resource.ResourceResolver;
 import org.apache.sling.distribution.DistributionRequest;
@@ -131,8 +129,6 @@ public class DistributionPublisher implements DistributionAgent {
 
     private Consumer<PackageMessage> sender;
 
-    private JMXRegistration reg;
-
     private Closeable statusPoller;
 
     private DistributionLogEventListener distributionLogEventListener;
@@ -155,7 +151,6 @@ public class DistributionPublisher implements DistributionAgent {
         pkgType = packageBuilder.getType();
 
         distributionLogEventListener = new DistributionLogEventListener(context, log, pubAgentName);
-        reg = registerJMXBean();
         String subscriberCountName = PUB_COMPONENT + ".subscriber_count;pub_name=" + pubAgentName;
         distributionMetricsService.createGauge(subscriberCountName, this::getNumSubscribedAgents);
         
@@ -173,7 +168,7 @@ public class DistributionPublisher implements DistributionAgent {
 
     @Deactivate
     public void deactivate() {
-        IOUtils.closeQuietly(statusPoller, distributionLogEventListener, reg);
+        IOUtils.closeQuietly(statusPoller, distributionLogEventListener);
         componentReg.unregister();
         String msg = format("Stopped Publisher agent %s with packageBuilder %s, queuedTimeout %s",
                 pubAgentName, pkgType, queuedTimeout);
@@ -240,15 +235,6 @@ public class DistributionPublisher implements DistributionAgent {
 
     private int getNumSubscribedAgents() {
         return discoveryService.getTopologyView().getSubscribedAgentIds().size();
-    }
-
-    private JMXRegistration registerJMXBean() {
-        try {
-            DistPublisherJMX bean = new DistPublisherJMX(pubAgentName, discoveryService, this);
-            return new JMXRegistration(bean, "agent", pubAgentName);
-        } catch (NotCompliantMBeanException e) {
-            throw new RuntimeException(e);
-        }
     }
 
     private DistributionResponse execute(ResourceResolver resourceResolver,
